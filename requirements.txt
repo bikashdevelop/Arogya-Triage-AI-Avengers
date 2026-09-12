@@ -1,0 +1,6 @@
+groq
+openai
+python-dotenv
+fastapi
+uvicorn
+python-multipart
