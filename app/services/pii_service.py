@@ -3,60 +3,73 @@ import re
 
 class PIIService:
     @staticmethod
+    def extract_names(text: str) -> list:
+        """Extract real names for the doctor's dashboard."""
+        if not text:
+            return []
+        names = []
+
+        # Hindi: "मेरा नाम X Y है"
+        hindi_stops = r'(?=\s+(?:है|हूँ|हूं|था|थी|का|की|के|आपका|आपकी|मेरा|मेरी|और|मुझे|मैं)\b|[।\.\?\!]|$)'
+        for match in re.finditer(
+            r'(?:मेरा\s+नाम|नाम)\s+([\u0900-\u097F]+(?:\s+[\u0900-\u097F]+){0,3})' + hindi_stops,
+            text
+        ):
+            names.append(match.group(1).strip())
+
+        # English
+        for match in re.finditer(
+            r'\b(?:My\s+name\s+is|I\s+am|I\'m)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,4})',
+            text,
+            flags=re.IGNORECASE
+        ):
+            names.append(match.group(1).strip())
+
+        for match in re.finditer(
+            r'\b(?:Patient\s+Name|Name)[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,4})',
+            text
+        ):
+            names.append(match.group(1).strip())
+
+        for match in re.finditer(
+            r'\b(?:Mr|Mrs|Ms|Dr|Shri|Smt|Sri)\.?\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})',
+            text
+        ):
+            names.append(match.group(1).strip())
+
+        seen = set()
+        unique = []
+        for n in names:
+            key = n.strip().lower()
+            if key and key not in seen:
+                seen.add(key)
+                unique.append(n.strip())
+        return unique
+
+    @staticmethod
     def redact(text: str) -> str:
+        """
+        Redact IDs, phones, emails — but KEEP names visible.
+        Runs safely even if called multiple times.
+        """
         if not text:
             return text
 
-        # ---------- ENGLISH NAME PATTERNS ----------
-        # "My name is X Y" → "My name is [NAME_REDACTED]"
-        text = re.sub(
-            r'\b(My\s+name\s+is|I\s+am|I\'m)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',
-            r'\1 [NAME_REDACTED]',
-            text,
-            flags=re.IGNORECASE
-        )
+        # Skip if already processed
+        if "[ABHA_ID_REDACTED]" in text and "[NAME_REDACTED]" not in text:
+            # Still check other patterns
+            pass
 
-        # "Name: X Y" / "Patient Name: X Y"
-        text = re.sub(
-            r'(Patient\s+Name|Name)[:\s]+[A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*',
-            r'\1: [NAME_REDACTED]',
-            text,
-            flags=re.IGNORECASE
-        )
-
-        # Names with English titles (Mr./Mrs./Dr.)
-        text = re.sub(
-            r'\b(Mr|Mrs|Ms|Dr|Shri|Smt|Sri)\.?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*',
-            '[NAME_REDACTED]',
-            text
-        )
-
-        # ---------- HINDI NAME PATTERNS ----------
-        # "मेरा नाम X है" → "मेरा नाम [NAME_REDACTED] है"
-        text = re.sub(
-            r'(मेरा\s+नाम|मेरा\s+नाम\s+है)\s+[\u0900-\u097F]+(?:\s+[\u0900-\u097F]+)*',
-            r'मेरा नाम [NAME_REDACTED]',
-            text
-        )
-
-        # "नाम: X" / "रोगी का नाम: X"
-        text = re.sub(
-            r'(नाम|रोगी\s+का\s+नाम)[:\s]+[\u0900-\u097F]+(?:\s+[\u0900-\u097F]+)*',
-            r'\1: [NAME_REDACTED]',
-            text
-        )
-
-        # ---------- IDENTIFIERS ----------
-        # ABHA ID (XX-XXXX-XXXX-XXXX)
+        # ABHA ID (only redact once)
         text = re.sub(r'\b\d{2}-\d{4}-\d{4}-\d{4}\b', '[ABHA_ID_REDACTED]', text)
 
-        # Aadhaar (12 digits)
+        # Aadhaar
         text = re.sub(r'\b\d{4}\s?\d{4}\s?\d{4}\b', '[AADHAAR_REDACTED]', text)
 
-        # Indian phone numbers (10 digits)
+        # Phone
         text = re.sub(r'\b[6-9]\d{9}\b', '[PHONE_REDACTED]', text)
 
-        # Emails
+        # Email
         text = re.sub(
             r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
             '[EMAIL_REDACTED]',

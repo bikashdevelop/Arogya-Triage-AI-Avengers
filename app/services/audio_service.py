@@ -3,6 +3,7 @@ import math
 import json
 from groq import Groq
 from dotenv import load_dotenv
+from app.services.pii_service import PIIService
 
 load_dotenv()
 
@@ -38,8 +39,8 @@ class AudioService:
             print(f"Groq STT failed: {e}")
             return "", 0.0
 
-    def refine_with_groq(self, text: str, source_lang: str) -> dict:
-        """Groq LLM: translate Hindi → English + extract structured data."""
+    def refine_with_groq(self, text: str, source_lang: str = "auto") -> dict:
+        """Groq LLM: translate + extract structured data. Receives REDACTED text only."""
         empty = {
             "translation": text,
             "symptoms": [],
@@ -52,35 +53,16 @@ class AudioService:
 
         system_prompt = (
             "You are a medical triage assistant for Indian government hospitals.\n"
-            "You receive a transcript of a patient describing their symptoms in Hindi, Odia, or English.\n\n"
-            "Your tasks:\n"
-            "1. TRANSLATE the transcript into natural, complete English. "
-            "Keep ALL information including the patient's name as spoken "
-            "(the name will be redacted later by another system). "
-            "Example: 'मेरा नाम जितेन्द्र सती है, मुझे बुखार है' → "
-            "'My name is Jitendra Sati, I have a fever.'\n"
-            "2. Extract the SYMPTOMS list.\n"
-            "3. Extract the DURATION if mentioned.\n"
-            "4. Extract the SEVERITY if mentioned.\n"
-            "5. Generate 3 FOLLOW-UP questions for a nurse.\n\n"
-            "Output ONLY a valid JSON object with these exact keys:\n"
-            "{\n"
-            "  \"translation\": \"<natural English translation>\",\n"
-            "  \"symptoms\": [\"...\"],\n"
-            "  \"duration\": \"...\",\n"
-            "  \"severity\": \"...\",\n"
-            "  \"follow_up_questions\": [\"...\", \"...\", \"...\"]\n"
-            "}\n"
-            "No commentary, no markdown, no code fences."
+            "Analyze the patient transcript and output ONLY a valid JSON object with these exact keys:\n"
+            "1. 'translation': Clear, professional English translation of the transcript.\n"
+            "2. 'symptoms': A list of identified symptoms (e.g., ['fever', 'headache']).\n"
+            "3. 'duration': How long the symptoms lasted (e.g., '3 days').\n"
+            "4. 'severity': The reported severity (e.g., 'mild', 'moderate', 'severe').\n"
+            "5. 'follow_up_questions': A list of 3 clinical questions for a nurse to ask.\n"
+            "Output ONLY the JSON object. No commentary, no markdown, no code fences."
         )
 
-        models_to_try = [
-            "openai/gpt-oss-120b",
-            "openai/gpt-oss-20b",
-            "qwen/qwen3.6-27b",
-        ]
-
-        for model in models_to_try:
+        for model in ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.6-27b"]:
             try:
                 response = self.groq_client.chat.completions.create(
                     model=model,
@@ -101,11 +83,12 @@ class AudioService:
         return empty
 
     def process_audio(self, audio_path: str) -> dict:
-        """Full pipeline: transcribe → confidence gate → translate + extract."""
+        """Full pipeline: transcribe → extract name → redact → send redacted to LLM."""
         print(f"Processing audio file: {audio_path}")
 
-        text, confidence = self.transcribe_audio(audio_path)
-        print(f"Groq STT output: {text}")
+        # STEP 1: Transcribe
+        raw_text, confidence = self.transcribe_audio(audio_path)
+        print(f"Groq STT output: {raw_text}")
         print(f"Confidence Score: {confidence:.2%}")
 
         if confidence < 0.60:
@@ -113,16 +96,27 @@ class AudioService:
                 "status": "low_confidence",
                 "message": "We couldn't hear you clearly. Please re-record in a quieter place.",
                 "confidence_score": confidence,
-                "original_transcription": text,
+                "original_transcription": raw_text,
             }
 
-        extracted = self.refine_with_groq(text, "auto")
+        # STEP 2: Extract real names (for doctor) BEFORE redaction
+        real_names = PIIService.extract_names(raw_text)
+        print(f"  🔒 Extracted {len(real_names)} name(s) for doctor: {real_names}")
+
+        # STEP 3: Redact names + IDs BEFORE sending to LLM
+        redacted_text = PIIService.redact(raw_text)
+        print(f"  🔒 Redacted text sent to LLM: {redacted_text[:80]}...")
+
+        # STEP 4: Send REDACTED text to LLM
+        extracted = self.refine_with_groq(redacted_text, "auto")
 
         return {
             "status": "success",
             "confidence_score": confidence,
-            "original_transcription": text,
-            "translation": extracted.get("translation", ""),
+            "patient_name": ", ".join(real_names) if real_names else "Unknown",  # ← for doctor
+            "original_transcription": raw_text,       # ← raw (used only internally)
+            "redacted_transcription": redacted_text,  # ← safe to log
+            "translation": extracted.get("translation", ""),  # ← already redacted
             "symptoms": extracted.get("symptoms", []),
             "duration": extracted.get("duration", ""),
             "severity": extracted.get("severity", ""),
