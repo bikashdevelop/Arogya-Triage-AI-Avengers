@@ -8,8 +8,10 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True, nullable=False)
     password_hash = Column(String, nullable=False)
-    role = Column(String, nullable=False)  # "nurse" | "doctor"
+    role = Column(String, nullable=False)
     full_name = Column(String, nullable=False)
+    department = Column(String, nullable=True)
+    facility_id = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -28,6 +30,7 @@ class TriageRecord(Base):
     __tablename__ = "triage_records"
     id = Column(Integer, primary_key=True, index=True)
     patient_id = Column(Integer, ForeignKey("patients.id"))
+    facility_id = Column(String, nullable=True)
     symptoms_text = Column(String)
     vitals_json = Column(String)
     mews_score = Column(Integer, default=0)
@@ -41,6 +44,9 @@ class TriageRecord(Base):
     ai_questions_json = Column(String, default="[]")
     ai_source = Column(String, default="unknown")
     status = Column(String, default="Waiting Review")
+    assigned_department = Column(String, nullable=True)
+    assigned_doctor_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    claimed_at = Column(DateTime, nullable=True)
     created_by = Column(Integer, ForeignKey("users.id"))
     reviewed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
