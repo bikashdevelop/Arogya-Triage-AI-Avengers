@@ -3,7 +3,6 @@ import NurseIntake from './NurseIntake';
 import PatientQueue from './PatientQueue';
 
 export default function App() {
-  // Simple routing based on URL path
   const path = window.location.pathname;
   const patientMatch = path.match(/^\/patient\/(.+)$/);
 
