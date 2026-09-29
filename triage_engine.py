@@ -12,7 +12,7 @@ def calculate_mews(vitals: Dict[str, Any]) -> Dict[str, Any]:
     elif 15 <= rr <= 20: score += 1; breakdown.append("RR 15-20 (+1)")
     elif 21 <= rr <= 29: score += 2; breakdown.append("RR 21-29 (+2)")
     elif rr >= 30: score += 3; breakdown.append("RR >= 30 (+3)")
-    
+
     hr = vitals.get('heart_rate', 80)
     if hr < 40: score += 2; breakdown.append("HR < 40 (+2)")
     elif 41 <= hr <= 50: score += 1; breakdown.append("HR 41-50 (+1)")
@@ -86,6 +86,104 @@ def determine_triage(symptoms: List[str], mews_score: int, facility: str) -> Dic
         "immediate_checklist": checklist
     }
 
+# STRUCTURED SUMMARY GENERATOR
+
+
+def generate_structured_summary(patient_data: Dict[str, Any], mews_score: int, triage_result: Dict[str, Any]) -> List[Dict[str, str]]:
+    summary = []
+    
+    demographics = patient_data.get("demographics", {})
+    symptoms = patient_data.get("symptoms", [])
+    lab_findings = patient_data.get("lab_findings", {})
+    vitals = patient_data.get("vitals", {})
+    
+    # 1. Demographics
+    age = demographics.get("age")
+    gender = demographics.get("gender")
+    if age and gender:
+        summary.append({"info": f"{age}y {gender}", "source": "Patient Demographics"})
+    
+    # 2. Symptoms
+    for symptom in symptoms:
+        summary.append({"info": symptom, "source": "Nurse Input (Text/Voice)"})
+    
+    # 3. Vitals with Interpretation
+    if vitals:
+        # --- BP Interpret ---
+        bp = vitals.get('systolic_bp', 0)
+        if bp >= 180:
+            bp_status = "VERY HIGH ↑↑"
+        elif bp >= 140:
+            bp_status = "HIGH ↑"
+        elif bp >= 90:
+            bp_status = "NORMAL"
+        elif bp >= 70:
+            bp_status = "LOW ↓"
+        else:
+            bp_status = "VERY LOW ↓↓"
+        
+        # --- HR Interpret ---
+        hr = vitals.get('heart_rate', 0)
+        if hr >= 130:
+            hr_status = "VERY HIGH ↑↑"
+        elif hr >= 100:
+            hr_status = "HIGH ↑"
+        elif hr >= 60:
+            hr_status = "NORMAL"
+        elif hr >= 40:
+            hr_status = "LOW ↓"
+        else:
+            hr_status = "VERY LOW ↓↓"
+        
+        # --- SpO2 Interpret ---
+        spo2 = vitals.get('spo2', 100)
+        if spo2 < 90:
+            spo2_status = "CRITICAL ↓↓"
+        elif spo2 < 95:
+            spo2_status = "LOW ↓"
+        else:
+            spo2_status = "NORMAL"
+        
+        # --- Temperature Interpret ---
+        temp = vitals.get('temperature_f', 98.6)
+        if temp >= 103:
+            temp_status = "VERY HIGH ↑↑"
+        elif temp >= 100.4:
+            temp_status = "HIGH ↑ (Fever)"
+        elif temp >= 97:
+            temp_status = "NORMAL"
+        else:
+            temp_status = "LOW ↓"
+        
+        # --- Combined Vitals Summary ---
+        vitals_text = (
+            f"BP {vitals.get('systolic_bp', '?')}/{vitals.get('diastolic_bp', '?')} ({bp_status}) | "
+            f"HR {vitals.get('heart_rate', '?')} bpm ({hr_status}) | "
+            f"SpO2 {vitals.get('spo2', '?')}% ({spo2_status}) | "
+            f"Temp {vitals.get('temperature_f', '?')}°F ({temp_status})"
+        )
+        
+        summary.append({"info": vitals_text, "source": "Vitals (Nurse Form)"})
+    
+    # 4. Lab Findings (OCR)
+    if lab_findings:
+        for key, value in lab_findings.items():
+            summary.append({"info": f"{key.capitalize()}: {value}", "source": "OCR Lab Report"})
+    
+    # 5. MEWS Score
+    summary.append({"info": f"MEWS Score: {mews_score}", "source": "Vitals Calculation"})
+    
+    # 6. Triage Priority
+    summary.append({"info": f"Priority: {triage_result.get('priority_label', 'N/A')}", "source": "Manchester Triage Engine"})
+    
+    # 7. Routing
+    summary.append({"info": f"Routing: {triage_result.get('recommended_department', 'N/A')}", "source": "Routing Engine"})
+    
+    # 8. Referral
+    if triage_result.get('referral_advice'):
+        summary.append({"info": triage_result['referral_advice'][:60] + "...", "source": "Referral Logic"})
+    
+    return summary
 
 
 # 3. MAIN ORCHESTRATOR
@@ -111,12 +209,16 @@ def run_triage_assessment(patient_data: Dict[str, Any]) -> Dict[str, Any]:
         "Are there any other family or work members experiencing identical symptoms?"
     ]
     
+    # Structured Summary
+    structured_summary = generate_structured_summary(patient_data, mews_result["score"], triage_result)
+    
     return {
         "status": "success",
         "mews_score": mews_result["score"],
         "mews_breakdown": mews_result["breakdown"],
         "triage_priority": triage_result["priority_label"],
         "triage_reason": triage_result["triage_reason"],
+        "structured_summary": structured_summary,
         "routing": {
             "recommended_department": triage_result["recommended_department"],
             "referral_advice": triage_result["referral_advice"],
