@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+python-multipart
+groq
+openai
+python-dotenv
+requests
+Pillow
+google-genai
