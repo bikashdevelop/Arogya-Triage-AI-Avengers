@@ -15,8 +15,8 @@ from triage_engine import run_triage_assessment
 
 app = FastAPI(
     title="AarogyaTriage API - Complete Workflow",
-    description="Nurse + Doctor + Chemist Workflow with Age-Aware Rule Engine",
-    version="2.0.0"
+    description="Nurse + Doctor + Chemist Workflow with MTS + MEWS Rule Engine",
+    version="3.0.0"
 )
 
 app.add_middleware(
@@ -38,21 +38,18 @@ doctor_decisions: List[Dict[str, Any]] = []
 prescriptions_store: Dict[str, Dict[str, Any]] = {}
 dispensed_records: List[Dict[str, Any]] = []
 
-# Counters
 patient_counter = 0
 token_counter = 1000
 prescription_counter = 0
 
 
 def generate_token() -> str:
-    """T-1001, T-1002, ..."""
     global token_counter
     token_counter += 1
     return f"T-{token_counter}"
 
 
 def find_patient_by_abha(abha_id: str) -> Dict[str, Any]:
-    """ABHA ID se patient dhundho - queue mein"""
     if not abha_id or abha_id == "N/A":
         return None
     for p in triage_queue:
@@ -72,7 +69,7 @@ def health_check():
 # ==========================================
 # 2. NURSE PAGE - TRIAGE + TOKEN
 # ==========================================
-@app.post("/api/triage", response_model=TriageResponse)
+@app.post("/api/triage")
 async def triage_patient(data: PatientDataInput):
     global patient_counter
     import traceback
@@ -81,23 +78,27 @@ async def triage_patient(data: PatientDataInput):
         # Step 1: Triage engine chalao
         result = run_triage_assessment(data.model_dump())
 
-        # Step 2: Check karo - kya patient pehle se queue mein hai? (ABHA ID se)
+        # Step 2: ABHA ID se existing patient check karo
         abha_id = data.demographics.get("abha_id", "N/A")
         existing_patient = find_patient_by_abha(abha_id)
 
         if existing_patient:
-            # Wahi token use karo (same day re-visit)
             token = existing_patient["token"]
             patient_id = existing_patient["id"]
             print(f">>> EXISTING PATIENT: Token {token} reused <<<")
         else:
-            # Naya token generate karo
             patient_counter += 1
             patient_id = patient_counter
             token = generate_token()
             print(f">>> NEW PATIENT: Token {token} assigned <<<")
 
-        # Step 3: Queue record
+        # Step 3: Naye engine se priority aur mews nikaalo
+        priority_code = result["provisional_triage"]["priority_code"]
+        priority_label = result["provisional_triage"]["label"]
+        priority_color = result["provisional_triage"]["color"]
+        mews_score = result["physiological_deterioration"]["mews_score"]
+
+        # Step 4: Queue record
         queue_record = {
             "id": patient_id,
             "token": token,
@@ -113,18 +114,19 @@ async def triage_patient(data: PatientDataInput):
             "lab_findings": data.lab_findings,
             "facility": data.facility,
             "triage_result": result,
-            "age_group": result.get("age_group"),
-            "patient_type": result.get("patient_type")
+            "triage_priority": priority_code,
+            "priority_label": priority_label,
+            "priority_color": priority_color,
+            "mews_score": mews_score
         }
 
-        # Agar existing patient hai toh update karo, warna naya add karo
         if existing_patient:
             idx = triage_queue.index(existing_patient)
             triage_queue[idx] = queue_record
         else:
             triage_queue.append(queue_record)
 
-        # Step 4: Response mein token + queue_id
+        # Step 5: Response mein token + queue_id add karo
         result["queue_id"] = patient_id
         result["token_number"] = token
         result["is_existing_patient"] = existing_patient is not None
@@ -139,16 +141,16 @@ async def triage_patient(data: PatientDataInput):
 
 
 # ==========================================
-# 3. DOCTOR QUEUE
+# 3. DOCTOR QUEUE (Priority-wise sorted)
 # ==========================================
 @app.get("/api/queue")
 def get_doctor_queue():
-    priority_order = {"P1": 1, "P2": 2, "P3": 3, "P4": 4}
+    priority_order = {"P1": 1, "P2": 2, "P3": 3, "P4": 4, "P5": 5}
     sorted_queue = sorted(
         triage_queue,
         key=lambda x: (
-            priority_order.get(x["triage_result"]["triage_priority"].split()[0], 5),
-            -x["triage_result"]["mews_score"],
+            priority_order.get(x.get("triage_priority", "P4"), 5),
+            -x.get("mews_score", 0),
             x["timestamp"]
         )
     )
@@ -181,7 +183,7 @@ def save_doctor_decision(data: DoctorDecisionInput):
         "prescription_ready": False
     }
 
-    # Action 1: Send to OPD
+    # Send to OPD
     if data.action == "Send to OPD":
         opd_queue.append({
             "patient_id": data.patient_id,
@@ -191,7 +193,7 @@ def save_doctor_decision(data: DoctorDecisionInput):
         })
         response["message"] = f"Patient {data.token} sent to OPD"
 
-    # Action 2: Send to Chemist
+    # Send to Chemist
     elif data.action == "Send to Chemist":
         if data.medicines and len(data.medicines) > 0:
             prescription_counter += 1
@@ -227,13 +229,13 @@ def save_doctor_decision(data: DoctorDecisionInput):
             response["prescription_id"] = prescription_counter
             response["message"] = f"Prescription #{prescription_counter} created for Token {data.token}"
 
-    # Action 3: Refer to DH
+    # Refer to DH
     elif data.action == "Refer to DH":
         referral_id = f"REF-{datetime.now().strftime('%Y%m%d')}-{data.patient_id:04d}"
         response["message"] = f"Patient {data.token} referred to DH"
         response["referral_id"] = referral_id
 
-    # Action 4: Send to ICU
+    # Send to ICU
     elif data.action == "Send to ICU":
         icu_queue.append({
             "patient_id": data.patient_id,
@@ -241,7 +243,7 @@ def save_doctor_decision(data: DoctorDecisionInput):
             "priority": data.final_priority,
             "notes": data.clinical_notes,
             "added_at": datetime.now().isoformat(),
-            "vitals_history": []    # ICU monitoring ke liye
+            "vitals_history": []
         })
         response["message"] = f"Patient {data.token} admitted to ICU"
 
@@ -262,76 +264,69 @@ def mark_as_reviewed(patient_id: int):
 
 
 # ==========================================
-# 5.5 ICU RE-TRIAGE (Continuous Monitoring)
+# 5.5 ICU RE-TRIAGE
 # ==========================================
 @app.post("/api/icu/re-triage/{token}")
 async def icu_re_triage(token: str, data: dict):
-    """
-    ICU mein patient ke naye vitals aaye toh re-triage karo.
-    """
     token = token.strip().upper()
-    
-    # ICU queue mein dhundho
     icu_patient = next((p for p in icu_queue if p["token"] == token), None)
-    
+
     if not icu_patient:
         raise HTTPException(status_code=404, detail=f"Token {token} not in ICU queue")
-    
-    # Naye vitals aur symptoms
+
     new_vitals = data.get("vitals", {})
     new_symptoms = data.get("symptoms", [])
     lab_findings = data.get("lab_findings", {})
-    
-    # Re-triage chalao
+
     triage_data = {
-        "demographics": {"age": 30, "gender": "Unknown"},  # ICU mein already known
+        "demographics": {"age": 30, "gender": "Unknown"},
         "vitals": new_vitals,
         "symptoms": new_symptoms,
         "lab_findings": lab_findings,
-        "patient_category": "None",
+        "patient_category": "Adult",
         "facility": "ICU"
     }
-    
+
     new_result = run_triage_assessment(triage_data)
-    
-    # History mein add karo
+
+    new_mews = new_result["physiological_deterioration"]["mews_score"]
+    new_priority = new_result["provisional_triage"]["priority_code"]
+
     icu_patient["vitals_history"].append({
         "timestamp": datetime.now().isoformat(),
-        "mews_score": new_result["mews_score"],
-        "triage_priority": new_result["triage_priority"],
+        "mews_score": new_mews,
+        "triage_priority": new_priority,
         "vitals": new_vitals
     })
-    
-    # Trend check karo (improving ya deteriorating)
+
     history = icu_patient["vitals_history"]
     trend = "stable"
     if len(history) >= 2:
         old_mews = history[-2]["mews_score"]
-        new_mews = history[-1]["mews_score"]
-        if new_mews > old_mews:
+        new_mews_val = history[-1]["mews_score"]
+        if new_mews_val > old_mews:
             trend = "deteriorating"
-        elif new_mews < old_mews:
+        elif new_mews_val < old_mews:
             trend = "improving"
-    
-    # Discharge readiness check
+
     discharge_ready = False
     if len(history) >= 3:
         last_3 = [h["mews_score"] for h in history[-3:]]
         if all(m <= 1 for m in last_3):
             discharge_ready = True
-    
+
     return {
         "status": "success",
         "token": token,
-        "new_mews": new_result["mews_score"],
-        "new_priority": new_result["triage_priority"],
+        "new_mews": new_mews,
+        "new_priority": new_priority,
         "trend": trend,
         "discharge_ready": discharge_ready,
         "recommendation": (
-            "✅ Discharge ready — shift to ward" if discharge_ready
-            else "🚨 Deteriorating — alert doctor" if trend == "deteriorating"
-            else "✅ Improving — continue monitoring" if trend == "improving"
-            else "🔄 Stable — continue monitoring"
+            "Discharge ready - shift to ward" if discharge_ready
+            else "Deteriorating - alert doctor" if trend == "deteriorating"
+            else "Improving - continue monitoring" if trend == "improving"
+            else "Stable - continue monitoring"
         )
     }
 
@@ -341,14 +336,11 @@ async def icu_re_triage(token: str, data: dict):
 # ==========================================
 @app.get("/api/icu/queue")
 def get_icu_queue():
-    return {
-        "total_patients": len(icu_queue),
-        "queue": icu_queue
-    }
+    return {"total_patients": len(icu_queue), "queue": icu_queue}
 
 
 # ==========================================
-# 6. CHEMIST - TOKEN SE PRESCRIPTION DHUNDHO
+# 6. CHEMIST - PRESCRIPTION LOOKUP
 # ==========================================
 @app.get("/api/chemist/prescription/{token}")
 def get_prescription_by_token(token: str):
@@ -356,10 +348,7 @@ def get_prescription_by_token(token: str):
     prescription = prescriptions_store.get(token)
 
     if not prescription:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No prescription found for Token: {token}"
-        )
+        raise HTTPException(status_code=404, detail=f"No prescription found for Token: {token}")
 
     if prescription["status"] == "dispensed":
         return {
@@ -368,15 +357,11 @@ def get_prescription_by_token(token: str):
             "prescription": prescription
         }
 
-    return {
-        "status": "success",
-        "token": token,
-        "prescription": prescription
-    }
+    return {"status": "success", "token": token, "prescription": prescription}
 
 
 # ==========================================
-# 7. CHEMIST - DISPENSE MEDICINE
+# 7. CHEMIST - DISPENSE
 # ==========================================
 @app.post("/api/chemist/dispense")
 def dispense_medicine(data: ChemistDispenseInput):
