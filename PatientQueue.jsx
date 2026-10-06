@@ -47,7 +47,7 @@ export default function PatientQueue({ patientId }) {
         timeline: [
           { done: true, text: 'Emergency Attended', time: '10:31 AM', location: 'CHC Casualty Room 1' },
           { done: true, text: 'Vitals Recorded', time: '10:33 AM', location: 'CHC Casualty Room 1' },
-          { done: true, text: 'AI Triage Complete', time: '10:34 AM', location: 'System' },
+          { done: true, text: 'Triage Complete', time: '10:34 AM', location: 'System' },
           { done: true, text: 'Doctor Consultation', time: '10:35 AM', location: 'CHC Casualty Room 1' },
           { done: true, text: 'Referral Generated', time: '10:41 AM', location: 'CHC' },
           { done: false, text: 'Transfer to DH', time: '10:45 AM', location: 'En Route' },
