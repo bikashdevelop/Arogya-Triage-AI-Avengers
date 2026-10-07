@@ -6,6 +6,13 @@ import ReferralNote from './ReferralNote';
 
 const API_BASE = 'http://localhost:8000';
 
+// 👈 NEW: Add translations for the follow-up UI options
+const FOLLOWUP_TRANSLATIONS = {
+  'English': { yes: 'Yes', no: 'No', mild: 'Mild', moderate: 'Moderate', severe: 'Severe' },
+  'हिन्दी (Hindi)': { yes: 'हाँ', no: 'नहीं', mild: 'हल्का', moderate: 'मध्यम', severe: 'गंभीर' },
+  'ଓଡ଼ିଆ (Odia)': { yes: 'ହଁ', no: 'ନା', mild: 'ସାମାନ୍ୟ', moderate: 'ମଧ୍ୟମ', severe: 'ଗମ୍ଭୀର' }
+};
+
 const PRIORITY_INFO = {
   P1: { urgency: 'Immediate / Emergent', wait: '0 minutes' },
   P2: { urgency: 'Very Urgent', wait: 'Within 10 minutes' },
@@ -306,6 +313,7 @@ export default function NurseIntake() {
           symptoms_text: form.symptoms,
           age: parseInt(form.patient_age) || 30,
           category: form.patient_category || 'None',
+          language: language, // 👈 FIX: Send the preferred language to the backend!
         },
         { headers: authHeaders() }
       );
@@ -332,7 +340,7 @@ export default function NurseIntake() {
     const events = [];
     if (form.symptom_onset) events.push({ date: form.symptom_onset, label: 'Symptom Onset', description: form.symptoms?.substring(0, 80), icon: '🩺', color: 'amber' });
     if (form.prior_visit_date) events.push({ date: form.prior_visit_date, label: 'Prior Visit', description: 'Previous consultation', icon: '🏥', color: 'slate' });
-    if (form.report_date && labExtracted) events.push({ date: form.report_date, label: 'Lab Report', description: `Hb: ${labExtracted.hemoglobin || '—'}`, icon: '📄', color: 'teal' });
+    if (form.report_date && labExtracted) events.push({ date: form.report_date, label: 'Lab Report', description: `Extracted ${labExtracted.extracted_values?.length || 0} values`, icon: '📄', color: 'teal' });
     if (imageObservations) events.push({ date: new Date().toISOString().slice(0, 10), label: 'Visual Capture', description: (imageObservations.findings || '').substring(0, 60), icon: '📷', color: 'blue' });
     if (form.current_medicines) events.push({ date: new Date().toISOString().slice(0, 10), label: 'Current Medicines', description: form.current_medicines, icon: '💊', color: 'purple' });
     events.push({ date: new Date().toISOString().slice(0, 10), label: 'Present Visit', description: `Vitals: BP ${form.bpSystolic}/${form.bpDiastolic}`, icon: '🚨', color: 'red' });
@@ -343,6 +351,10 @@ export default function NurseIntake() {
   const handleLabUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    
+    // 👈 FIXED: Clear the input value so React recognizes a new file upload
+    e.target.value = null; 
+    
     if (labReportFile) {
       setLabFileHistory(prev => [...prev, { name: labReportFile.name, replacedAt: new Date().toLocaleTimeString() }]);
     }
@@ -372,6 +384,10 @@ export default function NurseIntake() {
   const handleImageUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    
+    // 👈 FIXED: Clear the input value so React recognizes a new file upload
+    e.target.value = null; 
+    
     if (imageFile) {
       setImageFileHistory(prev => [...prev, { name: imageFile.name, replacedAt: new Date().toLocaleTimeString() }]);
     }
@@ -420,12 +436,28 @@ export default function NurseIntake() {
     setResult(null);
 
     try {
-      const labFindings = labExtracted && !labExtracted.error ? {
-        hemoglobin: parseNum(labExtracted.hemoglobin),
-        wbc: parseNum(labExtracted.wbc),
-        platelets: parseNum(labExtracted.platelets),
-        glucose: parseNum(labExtracted.glucose),
-      } : null;
+      // 👈 FIXED: Build a full text string of ALL extracted lab values
+      let labFindingsText = "";
+      let labFindings = null;
+      
+      if (labExtracted && !labExtracted.error && labExtracted.extracted_values) {
+        labFindingsText = "\n\n[LAB REPORT OCR RESULTS]:\n" + 
+          labExtracted.extracted_values.map(item => 
+            `- ${item.name}: ${item.value} ${item.unit || ''}`
+          ).join('\n');
+
+        // Keep specific values for the triage engine if they exist
+        const getVal = (keyword) => {
+          const found = labExtracted.extracted_values.find(i => i.name.toLowerCase().includes(keyword));
+          return found ? parseNum(found.value) : null;
+        };
+        labFindings = {
+          hemoglobin: getVal('hemoglobin') || getVal('hb'),
+          wbc: getVal('wbc') || getVal('leukocyte'),
+          platelets: getVal('platelet'),
+          glucose: getVal('glucose') || getVal('sugar'),
+        };
+      }
 
       const payload = {
         patient: {
@@ -437,7 +469,7 @@ export default function NurseIntake() {
           mobile: form.patient_mobile || null,
           email: form.patient_email || null,
           category: form.patient_category,
-          duration: form.symptom_onset || null, // 👈 FIX 1: Added symptom onset
+          duration: form.symptom_onset || null, 
           severity: null,
           medical_history: form.chronic_conditions.join(', ') || null,
           allergies: form.known_allergies || null,
@@ -446,9 +478,10 @@ export default function NurseIntake() {
           consent_given: true,
         },
         facility_type: facility,
-        symptoms_text: form.symptoms,
-        original_transcript: form.symptoms,
-        symptom_onset: form.symptom_onset || null, // 👈 FIX 2: Added symptom onset at root level too
+        // 👈 FIXED: Append the full OCR report text to the symptoms sent to the AI
+        symptoms_text: form.symptoms + labFindingsText, 
+        original_transcript: form.symptoms + labFindingsText,
+        symptom_onset: form.symptom_onset || null, 
         vitals: {
           bp_systolic: parseInt(form.bpSystolic) || 0,
           bp_diastolic: parseInt(form.bpDiastolic) || 0,
@@ -458,7 +491,7 @@ export default function NurseIntake() {
           respiratory_rate: parseInt(form.respiratoryRate) || 0,
         },
         lab_findings: labFindings,
-        followup_answers: followupAnswers || {}, // 👈 FIX 3: Ensured follow-up answers are sent
+        followup_answers: followupAnswers || {}, 
         image_findings: imageObservations?.findings || null,
       };
 
@@ -489,7 +522,7 @@ export default function NurseIntake() {
         assignment_explanation: d.assignment_explanation || [],
         assignment_fallback: d.assignment_fallback || null,
         summary: d.summary || 'Summary unavailable',
-        translated_text: d.translated_text || form.symptoms, // 👈 FIX 4: Ensure backend returns translated text
+        translated_text: d.translated_text || form.symptoms, 
         original_transcript: d.original_transcript || form.symptoms,
         triage_reason: d.triage_reason || '',
         vitals_summary: {
@@ -707,22 +740,30 @@ export default function NurseIntake() {
                   {dynamicQuestions.map((q, idx) => (
                     <div key={q.id} className="border border-slate-200 rounded-lg p-3">
                       <p className="text-sm text-slate-700 mb-2">{idx + 1}. {q.q} <Req /></p>
+                      
+                      {/* 👈 FIX: Use translated labels for Yes/No */}
                       {q.type === 'yesno' && (
                         <div className="flex gap-4">
                           {['Yes', 'No'].map(v => (
                             <label key={v} className="flex items-center gap-2 cursor-pointer">
                               <input type="radio" name={q.id} value={v} checked={followupAnswers[q.id] === v} onChange={(e) => handleFollowupAnswer(q.id, e.target.value)} className="w-4 h-4 accent-teal-500" />
-                              <span className="text-sm text-slate-600">{v}</span>
+                              <span className="text-sm text-slate-600">
+                                {v === 'Yes' ? FOLLOWUP_TRANSLATIONS[language]?.yes : FOLLOWUP_TRANSLATIONS[language]?.no}
+                              </span>
                             </label>
                           ))}
                         </div>
                       )}
+                      
+                      {/* 👈 FIX: Use translated labels for Severity */}
                       {q.type === 'severity' && (
                         <div className="flex gap-4 flex-wrap">
                           {['Mild', 'Moderate', 'Severe'].map(level => (
                             <label key={level} className="flex items-center gap-2 cursor-pointer">
                               <input type="radio" name={q.id} value={level} checked={followupAnswers[q.id] === level} onChange={(e) => handleFollowupAnswer(q.id, e.target.value)} className="w-4 h-4 accent-teal-500" />
-                              <span className={`text-sm ${level === 'Severe' ? 'text-red-600 font-semibold' : level === 'Moderate' ? 'text-amber-600 font-semibold' : 'text-green-600 font-semibold'}`}>{level}</span>
+                              <span className={`text-sm ${level === 'Severe' ? 'text-red-600 font-semibold' : level === 'Moderate' ? 'text-amber-600 font-semibold' : 'text-green-600 font-semibold'}`}>
+                                {FOLLOWUP_TRANSLATIONS[language]?.[level.toLowerCase()]}
+                              </span>
                             </label>
                           ))}
                         </div>
@@ -787,17 +828,33 @@ export default function NurseIntake() {
                 </div>
               </div>
               {isProcessingFile && <p className="text-xs text-teal-600 mt-2 animate-pulse">⏳ Processing file...</p>}
+              
+              {/* 👈 FIXED: Dynamic display for ALL extracted values */}
               {labExtracted && (
                 <div className="mt-3 bg-teal-50 border border-teal-200 rounded-lg p-3">
                   <p className="text-xs font-semibold text-teal-800 mb-1">✅ OCR Extracted Values:</p>
                   {labExtracted.error ? (
                     <p className="text-xs text-red-600">⚠️ {labExtracted.error}</p>
                   ) : (
-                    <div className="grid grid-cols-2 gap-2 text-xs text-teal-900">
-                      <div>Hemoglobin: <strong>{labExtracted.hemoglobin || '—'}</strong></div>
-                      <div>WBC: <strong>{labExtracted.wbc || '—'}</strong></div>
-                      <div>Platelets: <strong className="text-red-600">{labExtracted.platelets || '—'} ⚠</strong></div>
-                      <div>Glucose: <strong>{labExtracted.glucose || '—'}</strong></div>
+                    <div className="space-y-3">
+                      {labExtracted.patient_info && (labExtracted.patient_info.name || labExtracted.patient_info.age) && (
+                        <div className="text-xs text-teal-900 mb-2 border-b border-teal-200 pb-2">
+                          <strong>Patient:</strong> {labExtracted.patient_info.name || '—'} 
+                          ({labExtracted.patient_info.age || '?'}y / {labExtracted.patient_info.sex || '?'})
+                        </div>
+                      )}
+                      {labExtracted.extracted_values && labExtracted.extracted_values.length > 0 ? (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs text-teal-900">
+                          {labExtracted.extracted_values.map((item, idx) => (
+                            <div key={idx} className="flex justify-between border-b border-teal-100 pb-1">
+                              <span className="text-slate-600">{item.name}:</span>
+                              <strong className="text-right">{item.value} {item.unit}</strong>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-slate-500 italic">No structured values extracted.</p>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1072,8 +1129,8 @@ export default function NurseIntake() {
             patient={{
               name: form.patient_name, age: form.patient_age, sex: form.patient_sex,
               token: patientToken, priority: result.priority_tier, 
-              symptoms: result.translated_text || form.symptoms, // 👈 FIX 5: Pass translated text to Doctor
-              original_transcript: form.symptoms, // Pass original for reference
+              symptoms: result.translated_text || form.symptoms, 
+              original_transcript: form.symptoms, 
               bp: result.vitals_summary?.bp, hr: result.vitals_summary?.hr, spo2: result.vitals_summary?.spo2,
               temp: result.vitals_summary?.temp, mews: result.vitals_summary?.mews || 0,
               followup: followupAnswers, labReport: labExtracted, imageAnalysis: imageObservations,
