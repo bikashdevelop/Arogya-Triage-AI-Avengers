@@ -1,9 +1,39 @@
-fastapi
-uvicorn
-python-multipart
-groq
-openai
-python-dotenv
-requests
-Pillow
-google-genai
+# ═══════════════════════════════════════════════════════════
+#  AAROGYATRIAGE · BACKEND REQUIREMENTS
+#  Python 3.10+ required · Tested on Python 3.13
+# ═══════════════════════════════════════════════════════════
+
+# ─── Web Framework ───
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+python-multipart==0.0.12
+
+# ─── Database ───
+SQLAlchemy==2.0.36
+
+# ─── Validation & Config ───
+pydantic==2.9.2
+pydantic-settings==2.6.0
+python-dotenv==1.0.1
+
+# ─── Authentication & Security ───
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.2.0
+
+# ─── AI Services ───
+groq==0.11.0
+
+# ─── HTTP Client (Sarvam AI, Groq, etc.) ───
+httpx==0.27.2
+requests==2.32.3
+
+# ─── Image & File Processing (OCR / Vision) ───
+Pillow==10.4.0
+python-magic==0.4.27
+
+# ─── Utilities ───
+python-dateutil==2.9.0.post0
+
+# ─── Email Validation ───
+email-validator==2.2.0
